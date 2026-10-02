@@ -26,32 +26,35 @@ th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}th{co
 .stats{display:flex;gap:28px;flex-wrap:wrap;font:14px system-ui,sans-serif;color:var(--mute)}.stats b{display:block;font:600 28px Georgia,serif;color:var(--ink)}
 #toast{position:fixed;bottom:20px;right:20px;background:var(--ink);color:#fff;padding:10px 16px;border-radius:6px;font:14px system-ui,sans-serif;opacity:0;transition:opacity .2s}
 #toast.show{opacity:1}#toast.error{background:var(--bad)}
-.tbl{overflow-x:auto}
+.tbl{overflow-x:auto}nav[hidden]{display:none!important}a.btn{text-decoration:none;display:inline-block}
+nav #who{margin-top:28px;font:13px system-ui,sans-serif;color:#cfd8d3}nav #who button{display:inline;width:auto;padding:4px 0;margin-right:12px;text-decoration:underline;font:13px system-ui,sans-serif}
+.login{max-width:360px;margin:12vh auto}.login form{flex-direction:column;align-items:stretch}.login input{width:100%}
+@media print{nav,#toast,.btn{display:none!important}body{display:block;background:#fff}main{padding:0;max-width:none}.card{border:0}}
 @media(max-width:700px){body{flex-direction:column}nav{width:100%;display:flex;flex-wrap:wrap;gap:4px;padding:12px}nav h1{width:100%;margin:0 0 6px}nav button{width:auto}main{padding:16px}}
 </style></head><body>
-<nav><h1>Student Management</h1>
-<button data-tab="students" class="on">Students</button><button data-tab="faculty">Faculty</button>
-<button data-tab="exams">Exams</button><button data-tab="results">Results</button></nav>
+<nav hidden><h1>Student Management</h1>
+<div id="menu"></div><div id="who"></div></nav>
 <main id="main"></main><div id="toast" role="status"></div>
 <script>
 const $=s=>document.querySelector(s), main=$('#main');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let subjects=[];
+let subjects=[],me=null;
 function toast(m,bad){const t=$('#toast');t.textContent=m;t.className='show'+(bad?' error':'');clearTimeout(t.t);t.t=setTimeout(()=>t.className='',2600)}
 async function api(url,method='GET',body){
   const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body&&JSON.stringify(body)});
   if(r.status===204)return null;const d=await r.json();
+  if(r.status===401&&url!=='/api/login'){showLogin();throw new Error(d.error)}
   if(!r.ok)throw new Error(d.error||'Request failed');return d}
 const form=(fields,btn)=>`<form>${fields.map(([n,l,t])=>t==='select'?`<label>${l}<select name="${n}" required>${subjects.map(s=>`<option>${s}</option>`).join('')}</select></label>`:`<label>${l}<input name="${n}" ${t==='number'?'type="number" min="0" max="100" step="any"':''} ${n==='department'?'':'required'}></label>`).join('')}<button class="btn">${btn}</button></form>`;
 const table=(heads,rows,empty)=>rows.length?`<div class="tbl"><table><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr>${rows.join('')}</table></div>`:`<p class="empty">${empty}</p>`;
 const data=f=>Object.fromEntries(new FormData(f));
-function wire(sel,fn){const f=main.querySelector(sel);f.onsubmit=async e=>{e.preventDefault();try{await fn(data(f));f.reset()}catch(x){toast(x.message,1)}}}
+function wire(sel,fn){const f=main.querySelector(sel);if(!f)return;f.onsubmit=async e=>{e.preventDefault();try{await fn(data(f));f.reset()}catch(x){toast(x.message,1)}}}
 
 function crud(name,title,cols,fields,addLabel,rowFn,emptyMsg){
   return async()=>{
-    const rows=await api('/api/'+name);
-    main.innerHTML=`<h2>${title}</h2><div class="card">${form(fields,addLabel)}</div>
-    <div class="card">${table([...cols,''],rows.map(r=>`<tr>${rowFn(r)}<td><button class="btn del" data-id="${esc(r.id)}">Delete</button></td></tr>`),emptyMsg)}</div>`;
+    const rows=await api('/api/'+name),ro=me.role!=='admin';
+    main.innerHTML=`<h2>${title}</h2>${ro?'':`<div class="card">${form(fields,addLabel)}</div>`}
+    <div class="card">${table(ro?cols:[...cols,''],rows.map(r=>`<tr>${rowFn(r)}${ro?'':`<td><button class="btn del" data-id="${esc(r.id)}">Delete</button></td>`}</tr>`),emptyMsg)}</div>`;
     wire('form',async d=>{await api('/api/'+name,'POST',d);toast('Added.');tabs[name]()});
     main.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{
       if(!confirm('Delete '+b.dataset.id+'?'))return;
@@ -74,6 +77,41 @@ const tabs={
       $('#anout').innerHTML=a.entries.length?`<p class="stats" style="margin:12px 0">Average ${a.average} · Highest ${a.highest} · Lowest ${a.lowest}</p>`+table(['ID','Name','Marks'],a.entries.map(e=>`<tr><td>${esc(e.id)}</td><td>${esc(e.name)}</td><td>${e.marks}</td></tr>`)):'<p class="empty">No marks entered for this subject.</p>'};
     $('#an select').onchange=an;an()}
 };
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));tabs[b.dataset.tab]()});
-api('/api/subjects').then(s=>{subjects=s;tabs.students()});
+
+const reportHTML=r=>`<div class="card"><h3 style="margin-top:0">Report card</h3><p><b>${esc(r.name)}</b> (ID ${esc(r.id)})<br>Issued ${new Date().toLocaleDateString()}</p>
+${table(['Subject','Marks','Class average','Grade'],r.subjects.map(s=>`<tr><td>${s.subject}</td><td>${s.marks??'–'}</td><td>${s.class_average??'–'}</td><td>${s.grade??'–'}</td></tr>`),'')}
+<div class="stats"><span><b>${r.percentage??'–'}</b>percentage</span><span><b>${r.grade??'–'}</b>grade</span><span><b class="${r.passed?'pass':'fail'}">${r.passed==null?'–':r.passed?'Pass':'Fail'}</b>result</span><span><b>${r.rank?r.rank+' of '+r.class_size:'–'}</b>class rank</span></div></div>
+<button class="btn" onclick="window.print()">Print or save as PDF</button>`;
+tabs.mine=async()=>{main.innerHTML='<h2>My report</h2>'+reportHTML(await api('/api/report/'+encodeURIComponent(me.username)))};
+tabs.report=async()=>{
+  const st=await api('/api/students');
+  main.innerHTML=`<h2>Reports</h2><div class="card"><form id="rp">${st.length?`<label>Student<select>${st.map(s=>`<option value="${esc(s.id)}">${esc(s.id)} - ${esc(s.name)}</option>`).join('')}</select></label>`:''}<a class="btn" href="/api/results.csv" download>Download class results (CSV)</a></form></div><div id="rout">${st.length?'':'<p class="empty">Add students to see their reports.</p>'}</div>`;
+  const sel=$('#rp select');if(!sel)return;
+  const show=async()=>{try{$('#rout').innerHTML=reportHTML(await api('/api/report/'+encodeURIComponent(sel.value)))}catch(x){toast(x.message,1)}};
+  sel.onchange=show;show()};
+tabs.users=async()=>{
+  const rows=await api('/api/users');
+  main.innerHTML=`<h2>Users</h2><div class="card"><form><label>Username<input name="username" required></label><label>Password (6+ characters)<input name="password" type="password" minlength="6" required></label><label>Role<select name="role"><option>faculty</option><option>student</option><option>admin</option></select></label><button class="btn">Create login</button></form><p class="empty">A student login uses the student ID as the username.</p></div>
+  <div class="card">${table(['Username','Role',''],rows.map(u=>`<tr><td>${esc(u.username)}</td><td>${u.role}</td><td>${u.username===me.username?'':`<button class="btn del" data-id="${esc(u.username)}">Delete</button>`}</td></tr>`),'')}</div>`;
+  wire('form',async d=>{await api('/api/users','POST',d);toast('Login created.');tabs.users()});
+  main.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{if(!confirm('Delete login '+b.dataset.id+'?'))return;
+    try{await api('/api/users/'+encodeURIComponent(b.dataset.id),'DELETE');toast('Deleted.');tabs.users()}catch(x){toast(x.message,1)}})};
+
+const MENUS={admin:[['students','Students'],['faculty','Faculty'],['exams','Exams'],['results','Results'],['report','Reports'],['users','Users']],
+  faculty:[['students','Students'],['exams','Exams'],['results','Results'],['report','Reports']],student:[['mine','My report']]};
+function go(t){document.querySelectorAll('#menu button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));tabs[t]().catch(x=>toast(x.message,1))}
+function start(){
+  $('nav').hidden=false;
+  $('#menu').innerHTML=MENUS[me.role].map(([t,l])=>`<button data-tab="${t}">${l}</button>`).join('');
+  $('#menu').onclick=e=>{if(e.target.dataset.tab)go(e.target.dataset.tab)};
+  $('#who').innerHTML=`Signed in as <b>${esc(me.username)}</b> (${me.role})<br><button id="pw">Change password</button><button id="out">Log out</button>`;
+  $('#pw').onclick=async()=>{const o=prompt('Current password');if(o===null)return;const n=prompt('New password (6+ characters)');if(n===null)return;
+    try{await api('/api/password','POST',{old:o,new:n});toast('Password changed.')}catch(x){toast(x.message,1)}};
+  $('#out').onclick=async()=>{await api('/api/logout','POST');showLogin()};
+  go(MENUS[me.role][0][0])}
+function showLogin(){
+  me=null;$('nav').hidden=true;
+  main.innerHTML=`<div class="login card"><h2>Sign in</h2><form><label>Username<input name="username" required autofocus></label><label>Password<input name="password" type="password" required></label><button class="btn">Sign in</button></form><p class="empty">Students sign in with their student ID.</p></div>`;
+  wire('form',async d=>{me=await api('/api/login','POST',d);subjects=await api('/api/subjects');start()})}
+api('/api/me').then(u=>{me=u;return api('/api/subjects')}).then(x=>{subjects=x;start()}).catch(()=>{});
 </script></body></html>
